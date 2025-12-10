@@ -1,43 +1,42 @@
-import { NextResponse } from 'next/server';
-import { open } from 'sqlite';
-import sqlite3 from 'sqlite3';
+// api/checkSession.js
+import clientPromise from '@/lib/db';
 
-async function getDB() {
-    return open({
-        filename: './data.db',
-        driver: sqlite3.Database
+export default async function handler(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { token, hwid } = req.query;
+
+  try {
+    const client = await clientPromise;
+    const db = client.db('cevex');
+    
+    // Find session in database
+    const session = await db.collection('sessions').findOne({ 
+      token: token 
     });
-}
 
-export async function GET(request) {
-    const { searchParams } = new URL(request.url);
-    const token = searchParams.get('token');
-    const hwid = searchParams.get('hwid');
-
-    if (!token || !hwid) {
-        return NextResponse.json({ valid: false, reason: "Missing parameters" });
+    if (!session) {
+      return res.json({ valid: false });
     }
 
-    try {
-        const db = await getDB();
-        
-        // Проверяем сессию
-        const session = await db.get(
-            'SELECT * FROM sessions WHERE token = ? AND hwid = ? AND expires_at > CURRENT_TIMESTAMP',
-            [token, hwid]
-        );
-        
-        if (!session) {
-            return NextResponse.json({ valid: false, reason: "Invalid or expired session" });
-        }
-        
-        // Удаляем сессию после проверки (одноразовая)
-        await db.run('DELETE FROM sessions WHERE token = ?', [token]);
-        
-        return NextResponse.json({ valid: true });
-        
-    } catch (error) {
-        console.error('CheckSession error:', error);
-        return NextResponse.json({ valid: false, reason: "Server error" });
+    // Check if session expired
+    if (new Date() > new Date(session.expires)) {
+      // Clean up expired session
+      await db.collection('sessions').deleteOne({ token: token });
+      return res.json({ valid: false });
     }
+
+    // Check HWID match
+    if (session.hwid !== hwid) {
+      return res.json({ valid: false });
+    }
+
+    return res.json({ valid: true });
+
+  } catch (error) {
+    console.error('CheckSession error:', error);
+    return res.json({ valid: false });
+  }
 }
