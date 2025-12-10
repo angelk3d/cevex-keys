@@ -8,7 +8,6 @@ const userSessions = new Map(); // Сессии пользователей
 function generateBrowserFingerprint(request) {
   const headers = request.headers;
   
-  // Собираем данные из заголовков, которые уникальны для браузера
   const data = [
     headers.get('user-agent') || '',
     headers.get('accept-language') || '',
@@ -18,7 +17,6 @@ function generateBrowserFingerprint(request) {
     headers.get('sec-ch-ua-mobile') || '?0'
   ].join('|');
   
-  // Создаём хэш от этих данных
   return crypto.createHash('sha256').update(data).digest('hex').substring(0, 16);
 }
 
@@ -26,7 +24,7 @@ function generateBrowserFingerprint(request) {
 function getUserId(request) {
   const { searchParams } = new URL(request.url);
   
-  // 1. Приоритет: ClickID от CPA сети (самый надёжный)
+  // 1. Приоритет: ClickID от CPA сети
   const clickId = searchParams.get('clickid');
   if (clickId) return `click:${clickId}`;
   
@@ -34,7 +32,7 @@ function getUserId(request) {
   const subId = searchParams.get('subid');
   if (subId) return `sub:${subId}`;
   
-  // 3. Браузерный fingerprint (очень сложно изменить)
+  // 3. Браузерный fingerprint
   const browserFingerprint = generateBrowserFingerprint(request);
   return `fingerprint:${browserFingerprint}`;
 }
@@ -48,12 +46,13 @@ export async function GET(request) {
   const now = new Date();
   const userSession = userSessions.get(userId);
   
+  // 🎯 ИЗМЕНЕНИЕ: 9 часов вместо 24
   if (userSession) {
     const lastIssued = new Date(userSession.timestamp);
     const hoursSinceLast = (now - lastIssued) / (1000 * 60 * 60);
     
-    // Один ключ в 24 часа на пользователя
-    if (hoursSinceLast < 24) {
+    // Один ключ в 9 часов на пользователя
+    if (hoursSinceLast < 9) {
       const existingKey = userSession.key;
       const keyData = keysDB.get(existingKey);
       
@@ -97,10 +96,10 @@ export async function GET(request) {
     fingerprint: userId.includes('fingerprint:') ? userId : null
   });
   
-  // Очистка старых сессий
+  // 🎯 ИЗМЕНЕНИЕ: Очистка старых сессий (18 часов вместо 48)
   for (const [uid, session] of userSessions.entries()) {
     const sessionTime = new Date(session.timestamp);
-    if ((now - sessionTime) > 48 * 60 * 60 * 1000) {
+    if ((now - sessionTime) > 18 * 60 * 60 * 1000) {
       userSessions.delete(uid);
     }
   }
