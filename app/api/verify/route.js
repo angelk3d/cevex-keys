@@ -1,109 +1,55 @@
-// api/verify.js
-import clientPromise from '@/lib/db';
+import { supabase } from '@/lib/supabase'
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { key, hwid } = req.query;
-  
-  // Normalize key
-  const normalizedKey = key.toUpperCase().replace(/\s+/g, '');
-  
-  // Validate format
-  const keyRegex = /^(LL|LV)-[A-Z0-9]{4}-[A-Z0-9]{2}$/;
-  
-  if (!keyRegex.test(normalizedKey)) {
-    return res.json({ 
-      valid: false, 
-      reason: "Invalid key format. Use LL-XXXX-XX or LV-XXXX-XX" 
-    });
-  }
+  const normalizedKey = key?.toUpperCase().replace(/\s+/g, '') || '';
 
   try {
-    const client = await clientPromise;
-    const db = client.db('cevex');
-    
-    // Find key in database
-    const keyData = await db.collection('keys').findOne({ 
-      key: normalizedKey 
-    });
+    // Проверяем ключ
+    const { data: keyData, error } = await supabase
+      .from('keys')
+      .select('*')
+      .eq('key', normalizedKey)
+      .single();
 
-    if (!keyData) {
-      return res.json({ 
-        valid: false, 
-        reason: "Key not found in database" 
-      });
+    if (error || !keyData) {
+      return res.json({ valid: false, reason: "Key not found" });
     }
 
-    // Check if key is expired
-    if (new Date() > new Date(keyData.expires)) {
-      return res.json({ 
-        valid: false, 
-        reason: "Key expired" 
-      });
+    // Проверяем срок
+    const now = new Date();
+    const expires = new Date(keyData.expires);
+    if (now > expires) {
+      return res.json({ valid: false, reason: "Key expired" });
     }
 
-    // Check if key already used with different HWID
+    // Проверяем использован ли
     if (keyData.used && keyData.hwid !== hwid) {
-      return res.json({ 
-        valid: false, 
-        reason: "Key already used on different device" 
-      });
+      return res.json({ valid: false, reason: "Already used on another device" });
     }
 
-    // Mark key as used if not already used
+    // Обновляем если не использован
     if (!keyData.used) {
-      await db.collection('keys').updateOne(
-        { key: normalizedKey },
-        { 
-          $set: { 
-            used: true,
-            hwid: hwid,
-            usedAt: new Date(),
-            usedBy: hwid
-          }
-        }
-      );
+      await supabase
+        .from('keys')
+        .update({ used: true, hwid: hwid, used_at: new Date().toISOString() })
+        .eq('key', normalizedKey);
     }
 
-    // Generate session token
-    const crypto = require('crypto');
-    const sessionToken = crypto.randomBytes(32).toString('hex');
-    const sessionExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
-    // Save session to database
-    await db.collection('sessions').insertOne({
+    // Генерируем сессию
+    const sessionToken = require('crypto').randomBytes(32).toString('hex');
+    await supabase.from('sessions').insert({
       token: sessionToken,
       hwid: hwid,
       key: normalizedKey,
-      expires: sessionExpires,
-      createdAt: new Date(),
-      ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      expires: new Date(Date.now() + 5 * 60 * 1000).toISOString()
     });
 
-    // Save activation log
-    await db.collection('activations').insertOne({
-      key: normalizedKey,
-      hwid: hwid,
-      timestamp: new Date(),
-      userAgent: req.headers['user-agent'],
-      ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    });
-
-    return res.json({
-      valid: true,
-      session: sessionToken,
-      hwid: hwid,
-      expires: sessionExpires.getTime()
-    });
+    res.json({ valid: true, session: sessionToken });
 
   } catch (error) {
-    console.error('Verify error:', error);
-    return res.json({ 
-      valid: false, 
-      reason: "Server error. Please try again later." 
-    });
+    res.json({ valid: false, reason: "Server error" });
   }
 }
